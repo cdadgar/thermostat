@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<style>
+#name {
+  width: 30px;
+}
+.timeLabel {
+  width: 70px;
+  display: inline-block;
+}
+span {
+  padding-left: 150px;
+}
+</style>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+var program;
+var numPrograms;
+var socket;
+var selectedProgram = -1;
+var timeNames = [ '1:Wake', '2:Leave', '3:Return', '4:Sleep' ];
+var minTemp = 50, maxTemp = 99;
+
+$(document).ready(function(){
+  initWebsocket('program');
+
+//  msg = new Object();
+//  msg.data = '{"command":"program","value":[[1,65,"S-S",[26,78,68,32,78,68,63,78,68,88,78,60]],[1,30,"M-T",[26,78,68,32,85,60,63,78,68,88,78,60]],[1,32,"F",[26,78,68,32,85,60,55,78,68,88,78,60]],[0,0,"",[0,78,68,0,78,68,0,78,68,0,78,68]]]}';
+//  message(msg);
+});
+
+function message(msg){
+  console.log('onmessage ' + msg.data);
+
+  var obj = JSON.parse(msg.data);
+  console.log(obj);
+  program = obj.value;
+  numPrograms = program.length;
+
+  initGui();
+
+  $('#program0').attr('checked', true).button('refresh');
+  loadProgram(0);
+}
+
+function initGui() {
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '260%';
+  else
+    document.body.style.zoom = '120%';
+
+  // create the program buttons
+  var programs = $('#programs');
+  for (var i=0; i < numPrograms ; ++i) {
+    programs.append("<input id='program"+i+"' name='programs' type='radio' value='"+i+"'/><label for='program"+i+"'>Prog "+(i+1)+"</label>");
+  }
+  programs.buttonset();
+  $(':radio').click(function() {
+    // save the state of the program we're leaving
+    if (selectedProgram != 255 )
+      saveProgram(selectedProgram);
+    loadProgram(this.value);
+  });
+  $('#program0').attr('checked', true).button('refresh');
+
+  // create the day buttons
+  var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var days = $('#days');
+  for (var i=0; i < 7; ++i) {
+    days.append("<input id='"+names[i]+"' type='checkbox' value='"+i+"'/><label style='font-size:14px;' for='"+names[i]+"'>"+names[i]+"</label>");
+  }
+  days.buttonset();
+
+  // create the time and temp dropdowns
+  var times = $('#times');
+  var str = '';
+  for (var j=0; j < 4; ++j) {
+    str += '<label class="timeLabel">' + timeNames[j] + "</label><select name='time"+j+"' id='time"+j+"'>";
+    for (var i=0; i < 96; ++i) {
+      var ampm = 'am';
+      var h = Math.floor(i/4);
+      var m = i%4*15;
+      if (m==0)
+        m = '00';
+      if (h==0)
+        h = 12;
+      else if (h==12)
+        ampm = 'pm';
+      else if (h > 12) {
+        h -= 12;
+        ampm = 'pm';
+      }
+      var time = h + ':' + m + ampm;
+      str += "<option value='"+i+"'>"+time+'</option>';
+    }
+    str += '</select>';
+
+    str += "<select name='coolTemp"+j+"' id='coolTemp"+j+"'>";
+    for (var i=50; i < 100; ++i) {
+      str += "<option value='"+i+"'>"+i+'</option>';
+    }
+    str += '</select>';
+
+    str += "<select name='heatTemp"+j+"' id='heatTemp"+j+"'>";
+    for (var i=50; i < 100; ++i) {
+      str += "<option value='"+i+"'>"+i+'</option>';
+    }
+    str += '</select>';
+
+    str += '<br>';
+  }
+  times.append(str);
+
+  $('#save').button().click(function(event) {
+    // send programs array to the backend
+    doSave();
+    close();
+  });
+
+  $('#cancel').button().click(function(event) {
+    close();
+  });
+
+  $('#default').button().click(function(event) {
+    doDefault();
+  });
+}
+
+function saveProgram(num) {
+  program[num][0] = $('#isEnabled').is(':checked') ? 1 : 0;
+
+  var days = 0;
+  $('input:checkbox:checked').each(function() {
+    if ($(this).attr('id') == 'isEnabled')
+      return;
+    days |= 1 << this.value;
+  });
+  program[num][1] = days;
+
+  program[num][2] = $('#name').val();
+
+  var j = 0;
+  for (var i=0; i < 4; ++i) {
+	program[num][3][j++] = parseInt($('#time'+i).val());
+	program[num][3][j++] = parseInt($('#coolTemp'+i).val());
+	program[num][3][j++] = parseInt($('#heatTemp'+i).val());
+  }
+}
+
+function doSave() {
+  saveProgram(selectedProgram);
+  var json = {
+    command: 'saveProgram',
+    value: program
+  };
+//console.log(JSON.stringify(json));
+  socket.send(JSON.stringify(json)); 
+}
+
+function close() {
+  window.location.href='index.htm';
+}
+
+function doDefault() {
+  program = [[1,65,"S-S",[6*4,78,72,6*4+2,78,72,15*4+3,78,72,22*4,78,72]],
+             [1,30,"M-T",[6*4,78,72,6*4+2,85,60,15*4+3,78,72,22*4,78,72]],
+             [1,32,"F",[6*4,78,72,6*4+2,85,60,13*4+3,78,72,22*4,78,72]],
+             [0,0,"",[0,78,72,0,78,72,0,78,72,0,78,72]]];
+  $('#program0').click();
+  $('#program0').attr('checked', true).button('refresh');
+  loadProgram(0);
+}
+
+function loadProgram(num) {
+  selectedProgram = num;
+  var prog = program[num];
+
+  var isEnabled = prog[0];
+  $('#isEnabled').prop('checked', isEnabled==1);
+
+  var days = prog[1];
+  $('input:checkbox').each(function() {
+    if ($(this).attr('id') == 'isEnabled')
+      return;
+	if (((1 << this.value) & days) != 0)
+      $(this).prop('checked', true).button('refresh');
+    else
+      $(this).prop('checked', false).button('refresh');
+  });
+
+  $('#name').val(prog[2]);
+
+  var times = prog[3];
+  var j = 0;
+  for (var i=0; i < 4; ++i) {
+    $('#time'+i).val(times[j++]);
+    $('#coolTemp'+i).val(times[j++]);
+    $('#heatTemp'+i).val(times[j++]);
+  }
+}
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <div id='programs'></div><br>
+  <div id='days'></div><br>
+  <input type='checkbox' id='isEnabled'>Program Enabled<br>
+  Name:<input id='name'><br>
+  <span>Cool/Heat</span><br>
+  <div id='times'></div><br>
+  <button id='save'>Save</button>
+  <button id='cancel'>Cancel</button>
+  <button id='default'>Default</button>
+</div>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+var log_url;
+
+$(document).ready(function(){
+  initGui();
+  initWebsocket('');
+});
+
+function message(msg){
+//console.log('onmessage ' + msg.data);
+  var obj = JSON.parse(msg.data);
+  if (obj.command == 'mode' || obj.command == 'fan')
+    $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
+  else if (obj.command == 'log_url')
+	log_url = obj.value;
+  else {
+    var extra = '';
+    if (obj.value != '' && (obj.command == 'currentTemp' || obj.command == 'targetTemp' || obj.command == 'outsideTemp')) {
+      if (obj.value == '-999.0')
+        return;
+      extra = '&deg;';
+    }
+    $('#'+obj.command).html(obj.value + extra);
+  }
+}
+
+function initGui(){
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '320%';
+  else
+    document.body.style.zoom = '165%';
+
+  $('#mode').buttonset();
+  $('#fan').buttonset();
+  
+  $(':radio').click(function() {
+    var json = {
+      command: this.name,
+      value: this.value
+    };
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#up').button().click(function(event) {
+    var json = {
+      command: 'up'
+    };
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#down').button().click(function(event) {
+    var json = {
+      command: 'down'
+    };
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#prog').button().click(function(event) {
+    window.location.href='./program.htm';
+  });
+
+  $('#setup').button().click(function(event) {
+    window.location.href='./setup.htm';
+  });
+
+  $('#test').button().click(function(event) {
+    window.location.href='./test.htm';
+  });
+
+  $('#log').button().click(function(event) {
+    window.open(log_url, '_blank');
+  });
+}
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <div style='zoom:200%;'>
+    <span id='currentTemp' class='ui-widget'></span>&nbsp;&nbsp;<span id='outsideTemp' class='ui-widget'></span><br>
+    <span id='targetTemp' class='ui-widget'></span><br>
+    <span id='time' class='ui-widget'></span><br>
+    <span id='run' class='ui-widget' style='width:40px;display:inline-block;'></span>&nbsp;&nbsp;&nbsp;&nbsp;<span id='program' class='ui-widget'></span>
+  </div>
+  <br>
+  <div id='mode'>
+    <input type='radio' id='mode0' name='mode' value='0'><label for='mode0'>Off</label>
+    <input type='radio' id='mode1' name='mode' value='1'><label for='mode1'>On</label>
+    <input type='radio' id='mode2' name='mode' value='2'><label for='mode2'>Temp</label>
+    <input type='radio' id='mode3' name='mode' value='3'><label for='mode3'>Hold</label>
+  </div>
+  <br>
+  <div id='fan'>
+    <label for='fan' class='ui-widget'>Fan:</label>
+    <input type='radio' id='fan0' name='fan' value='0'><label for='fan0'>Auto</label>
+    <input type='radio' id='fan1' name='fan' value='1'><label for='fan1'>On</label> 
+  </div>
+  <br>
+  <button id='up'>Up</button>
+  <button id='down'>Down</button>
+  <button id='prog'>Program</button>
+  <br><br>
+  <button id='setup'>Setup</button>
+  <button id='test'>Test</button>
+  <button id='log'>Log</button>
+</div>
+</body>
+</html>
