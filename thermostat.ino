@@ -24,7 +24,8 @@
 
 /*
  * todo:
- *  - fix compile
+ *  - fix mfgfx (getstringwidth and getfont height not working)
+ *  - test with a variety of displays
  *  - add ota
  *  - add mqtt
  */
@@ -41,7 +42,7 @@
  * Timezone - https://github.com/JChristensen/Timezone (git)
  * ArduinoJson - https://github.com/bblanchon/ArduinoJson  (git)
  * 
- * Adafruit_mfGFX - https://github.com/pkourany/Arduino_Adafruit_mfGFX_Library (git)
+ * Adafruit_mfGFX - https://github.com/pkourany/Arduino_Adafruit_mfGFX_Library (git)  (not working?)
  * Adafruit_GFX.h - https://github.com/adafruit/Adafruit-GFX-Library (git)
  * Adafruit_ILI9341 - https://github.com/adafruit/Adafruit_ILI9341 (git)
  */
@@ -60,7 +61,7 @@
 /*
  * if DISPLAY_14 is defined, the 1.4" 128x128 tft ILI9163C display is used
  * if DISPLAY_18 is defined, the 1.8" 128x160 tft ST7735 display is used
- * if DISPLAY_22 is defined, the 2.2" 240x320 tft ILI9340 display is used
+ * if DISPLAY_22 is defined, the 2.2" 240x320 tft ILI9340 display is used (uses the ILI9341 library)
  * if DISPLAY_28 is defined, the 2.8" 240x320 tft ILI9341 display is used
  *   this display has a touch screen, but it doesn't seem to be very good.
  * we're not using the extra space on the taller display, just centering what we have on it.
@@ -114,14 +115,15 @@ Timezone myTZ(myDST, mySTD);
 
 // display includes
 
-#define FONTS
-#define font_arial_8   1
-#define font_arial_16  2
-#define font_arial_24  3
+// cpd...these need to mfgfx library to work...can't get it to compile
+//#define FONTS
+//#define font_arial_8   1
+//#define font_arial_16  2
+//#define font_arial_24  3
 
 #include <SPI.h>
-//#include <Adafruit_GFX.h>
-#include <Adafruit_mfGFX.h>
+#include <Adafruit_GFX.h>
+// cpd...working? #include <Adafruit_mfGFX.h>
 #ifdef DISPLAY_14
 #include <TFT_ILI9163C.h>
 #define GREEN 0x07E0
@@ -134,11 +136,10 @@ Timezone myTZ(myDST, mySTD);
 #define RED   ST7735_RED
 #endif
 #ifdef DISPLAY_22
-//#include <Adafruit_ILI9340.h>
 #include <Adafruit_ILI9341.h>
-#define BLACK ILI9340_BLACK
-#define GREEN ILI9340_GREEN
-#define RED   ILI9340_RED
+#define BLACK ILI9341_BLACK
+#define GREEN ILI9341_GREEN
+#define RED   ILI9341_RED
 #endif
 #ifdef DISPLAY_28
 #include <Adafruit_ILI9341.h>
@@ -252,7 +253,7 @@ TFT_ILI9163C display = TFT_ILI9163C(__CS, __DC);
 Adafruit_ST7735 display = Adafruit_ST7735(__CS, __DC);
 #endif
 #ifdef DISPLAY_22
-Adafruit_ILI9340 display = Adafruit_ILI9340(__CS, __DC, -1);
+Adafruit_ILI9341 display = Adafruit_ILI9341(__CS, __DC, -1);
 #endif
 #ifdef DISPLAY_28
 Adafruit_ILI9341 display = Adafruit_ILI9341(__CS, __DC);
@@ -1497,10 +1498,10 @@ void eraseTime(void) {
   if (isDisplayOn) {
     setTextSize(2);
     char *txt = (char *)"         ";
-    setCursor(128-display.getStringWidth(txt), 25);
+    setCursor(128-getStringWidth(txt), 25);
     display.print(txt);
     txt = (char *)"              ";
-    setCursor(128-display.getStringWidth(txt), 45);
+    setCursor(128-getStringWidth(txt), 45);
     display.print(txt);
   }
 }
@@ -1528,9 +1529,9 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
   if (isDisplay && isDisplayOn) {
     display.setTextColor(GREEN, BLACK);
     setTextSize(2);
-    setCursor(128-display.getStringWidth((char *)buf), 45);
+    setCursor(128-getStringWidth(buf), 45);
     display.print(buf);
-    setCursor(128-display.getStringWidth((char *)weekdayNames[dayOfWeek]), 25);
+    setCursor(128-getStringWidth(weekdayNames[dayOfWeek]), 25);
     display.print(weekdayNames[dayOfWeek]);
   }
   
@@ -1640,7 +1641,7 @@ void eraseOutsideTemperature(bool isDisplay) {
 //    Serial.printf("outside temp %d %d\n", width, outsideTempWidth);
     if (width < outsideTempWidth) {
       // erase some more
-      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, display.getFontHeight(), BLACK);
+      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, getFontHeight(), BLACK);
     }
     outsideTempWidth = width;
   }
@@ -1674,11 +1675,11 @@ void printOutsideTemperature(bool isDisplay) {
     *ptr++ = (char)176;  // degree symbol
     *ptr = '\0';
 #endif
-    int width = display.getStringWidth(buf);
+    int width = getStringWidth(buf);
 //    Serial.printf("outside temp %d %d\n", width, outsideTempWidth);
     if (width < outsideTempWidth) {
       // erase some more
-      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, display.getFontHeight(), BLACK);
+      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, getFontHeight(), BLACK);
     }
     outsideTempWidth = width;
 
@@ -1712,10 +1713,10 @@ void printCurrentTemperature(bool isDisplay) {
     *ptr++ = (char)176;
     *ptr = '\0';
 #endif
-    int width = display.getStringWidth(buf);
+    int width = getStringWidth(buf);
     if (width < currentTempWidth) {
       // erase some more
-      display.fillRect(width, 0, currentTempWidth-width, display.getFontHeight(), BLACK);
+      display.fillRect(width, 0, currentTempWidth-width, getFontHeight(), BLACK);
     }
     currentTempWidth = width;
 
@@ -1805,7 +1806,7 @@ void printModeState(bool isDisplay) {
     setTextSize(2);
     setCursor(0, 70);
     display.print("Mode:");
-    setCursor(128-display.getStringWidth((char *)modeNames[config.mode]), 70);
+    setCursor(128-getStringWidth(modeNames[config.mode]), 70);
     display.print(modeNames[config.mode]);
   }
 
@@ -1822,7 +1823,7 @@ void printFanState(bool isDisplay) {
     setTextSize(2);
     setCursor(0, 90);
     display.print("Fan:");
-    setCursor(128-display.getStringWidth((char *)fanNames[config.fan]), 90);
+    setCursor(128-getStringWidth(fanNames[config.fan]), 90);
     display.print(fanNames[config.fan]);
   }
 
@@ -1856,6 +1857,18 @@ void printRunState(bool isDisplay) {
   }
 }
 
+int getStringWidth(const char* buf) {
+  // cpd...not working
+//  return display.getStringWidth(buf);
+  return 10;
+}
+
+int getFontHeight() {
+  // cpd...not working
+//  return display.getFontHeight();
+  return 8;
+}
+
 void printProgramState(byte p_program, byte p_time, bool isDisplay) {
   if (last_p_program == p_program && last_p_time == p_time && !isForcePrint)
     return;
@@ -1873,7 +1886,7 @@ void printProgramState(byte p_program, byte p_time, bool isDisplay) {
     else {
       char buf[6];
       sprintf(buf, "%s %d", program[p_program].name, p_time+1);
-      setCursor(128-display.getStringWidth((char *)buf), 110);
+      setCursor(128-getStringWidth(buf), 110);
       display.print(buf);
     }
   }
