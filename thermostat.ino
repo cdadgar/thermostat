@@ -1,6 +1,19 @@
-#define BREADBOARD
+//#define BREADBOARD
 //#define BUILD_ONE        // master bedroom
-//#define BUILD_TWO        // gameroom
+#define BUILD_TWO        // gameroom
+
+
+/*
+ * module is a WeMos D1 R1
+ * flash size set to 4M (1M SPIFFS) or 4MB (FS:1MB OTA:~1019KB) (latest esp board sw uses this)
+ * OR
+ * module is a esp12e
+ * flash size set to 4M (1M SPIFFS) or 4MB (FS:1MB OTA:~1019KB) (latest esp board sw uses this)
+ * OR
+ * module is a esp7
+ * flash size set to 1M (128KB SPIFFS) or 1MB (FS:128KB OTA:~438KB) (latest esp board sw uses this)
+ * if this enough to do ota?  (esp-07s has 4MB of memory)
+ */
 
 
 #ifdef BREADBOARD
@@ -13,14 +26,6 @@
 #ifdef BUILD_TWO
 #define DISPLAY_18
 #endif
-
-/*
- * module is a esp-12  (Generic ESP8266 Module)
- * flash size set to 4MB (FS:1MB OTA:~1019KB)
- * 
- * esp7 module doesn't seem to be 4M  (it'll crash if you try it)
- * it works with 1M (128K SPIFFS)...it may be larger
- */
 
 /*
  * todo:
@@ -44,7 +49,10 @@
  * 
  * Adafruit_mfGFX - https://github.com/pkourany/Arduino_Adafruit_mfGFX_Library (git)  (not working?)
  * Adafruit_GFX.h - https://github.com/adafruit/Adafruit-GFX-Library (git)
+ * 
  * Adafruit_ILI9341 - https://github.com/adafruit/Adafruit_ILI9341 (git)
+ * TFT_ILI9163C.h - https://github.com/PaulStoffregen/TFT_ILI9163C
+ * Adafruit_ST7735.h - https://github.com/adafruit/Adafruit-ST7735-Library
  */
 
 /*
@@ -250,7 +258,7 @@ byte muxState;
 TFT_ILI9163C display = TFT_ILI9163C(__CS, __DC);
 #endif
 #ifdef DISPLAY_18
-Adafruit_ST7735 display = Adafruit_ST7735(__CS, __DC);
+Adafruit_ST7735 display = Adafruit_ST7735(__CS, __DC, -1);
 #endif
 #ifdef DISPLAY_22
 Adafruit_ILI9341 display = Adafruit_ILI9341(__CS, __DC, -1);
