@@ -109,6 +109,9 @@ Timezone myTZ(myDST, mySTD);
 #include <DNSServer.h>
 #include <WiFiManager.h>
 
+WiFiManager wifiManager;
+String ssid;
+
 // --------------------------------------------
 
 // aync library includes
@@ -117,7 +120,26 @@ Timezone myTZ(myDST, mySTD);
 
 // --------------------------------------------
 
+// mqtt library includes
+#include <PubSubClient.h>
+
+// --------------------------------------------
+
+// arduino ota library includes
+#include <ArduinoOTA.h>
+
+#include <WiFiClient.h>
+#include <ESP8266mDNS.h>
+#include <ESP8266HTTPUpdateServer.h>
+ESP8266HTTPUpdateServer httpUpdater;
+
+// --------------------------------------------
+
 #include <Wire.h>
+
+// --------------------------------------------
+
+const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // --------------------------------------------
 
@@ -185,13 +207,6 @@ const char WUNDERGROUND_REQ3[] = ".json HTTP/1.1\r\n"
 #define TEMP_IP_PORT 9090
 
 #define TEMP_ERROR -999
-
-// --------------------------------------------
-
-////US Eastern Time Zone (New York, Detroit)
-//TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
-//TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
-//Timezone myTZ(myDST, mySTD);
 
 // --------------------------------------------
 
@@ -479,7 +494,6 @@ F     4     10:00pm    78    72
 
 ESP8266WebServer server(80);
 File fsUploadFile;
-bool isUploading;
 
 WebSocketsServer webSocket = WebSocketsServer(81);
 int webClient = -1;
@@ -495,11 +509,22 @@ int indent = 10;
 
 bool isTimeSet = false;
 
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+#define HOST_NAME "THERMOSTAT"
+#define MQTT_IP_ADDR "192.168.1.210"
+#define MQTT_IP_PORT 1883
+
 bool isPromModified;
 bool isMemoryReset = false;
 //bool isMemoryReset = true;
 
 typedef struct {
+  char host_name[17];
+  char mqtt_ip_addr[17];
+  int mqtt_ip_port;
+  byte use_mqtt;
   byte mode;
   byte fan;
   byte temperature_span;
@@ -637,6 +662,8 @@ void setup(void) {
   
   setupTime();
   setupWebServer();
+  setupMqtt();
+  setupOta();
   
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
@@ -652,8 +679,6 @@ void setup(void) {
   lastMotionReadTime = -TimeBetweenMotionChecks;
 
   lastButtonPressTime = millis();
-
-  isUploading = false;
 
   isSetup = true;
   drawMainScreen();
@@ -738,6 +763,7 @@ void clearScreen(void) {
 #endif
 }
 
+
 void setCursor(int x, int y) {
 #ifdef DISPLAY_18
   y += 16;
@@ -786,6 +812,7 @@ void setupDisplay(void) {
   displayBacklight(true);
 }
 
+
 void displayBacklight(bool isOn) {
 //  Serial.printf("backlight %d\n", isOn);
   if (isSetup && !isDisplayOn && isOn) {
@@ -802,24 +829,30 @@ void displayBacklight(bool isOn) {
   isDisplayOn = isOn;
 }
 
+
 void print(const char *str) {
   Serial.print(str);
   display.print(str);
 }
+
 
 void print(const __FlashStringHelper *str) {
   Serial.print(str);
   display.print(str);
 }
 
+
 void println(const char *str) {
   Serial.println(str);
   display.println(str);
 }
+
+
 void println(const __FlashStringHelper *str) {
   Serial.println(str);
   display.println(str);
 }
+
 
 bool setupTempSensor(void) {
   // locate devices on the bus
@@ -858,7 +891,14 @@ bool setupTempSensor(void) {
   return true;
 }
 
-#define AP_NAME "Thermostat"
+
+void printName() {
+  if (webClient == -1)
+    return;
+    
+  sendWeb("name", config.host_name);
+}
+
 
 void configModeCallback(WiFiManager *myWiFiManager) {
   // this callback gets called when the enter AP mode, and the users
@@ -870,7 +910,7 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   println(F("WiFi Not Configured"));
   println(F("Join this network:"));
   setTextSize(2);
-  println(F(AP_NAME));
+  println(config.host_name);
   setTextSize(1);
   println(F("And open a browser to:"));
   Serial.println(WiFi.softAPIP());
@@ -878,16 +918,16 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   display.println(WiFi.softAPIP());
 }
 
+
 bool setupWifi(void) {
-  WiFi.hostname(F("thermostat"));
+  WiFi.hostname(config.host_name);
   
-  WiFiManager wifiManager;
 //  wifiManager.setDebugOutput(false);
   
   //reset settings - for testing
   //wifiManager.resetSettings();
 
-  String ssid = WiFi.SSID();
+  ssid = WiFi.SSID();
   if (ssid.length() > 0) {
     print(F("Connecting to "));
     Serial.println(ssid);
@@ -897,7 +937,7 @@ bool setupWifi(void) {
   //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wifiManager.setAPCallback(configModeCallback);
 
-  if(!wifiManager.autoConnect(AP_NAME)) {
+  if(!wifiManager.autoConnect(config.host_name)) {
     Serial.println(F("failed to connect and hit timeout"));
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
@@ -1009,6 +1049,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         webClient = num;
       
         // send the current state
+        printName();
         printCurrentTemperature(false);
         printTargetTemperature(false);
         printOutsideTemperature(false);
@@ -1052,6 +1093,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         strcpy(json, "{");
         sprintf(json+strlen(json), "\"date\":\"%s\"", __DATE__);
         sprintf(json+strlen(json), ",\"time\":\"%s\"", __TIME__);
+        sprintf(json+strlen(json), ",\"host_name\":\"%s\"", config.host_name);
+        sprintf(json+strlen(json), ",\"use_mqtt\":\"%d\"", config.use_mqtt);
+        sprintf(json+strlen(json), ",\"mqtt_ip_addr\":\"%s\"", config.mqtt_ip_addr);
+        sprintf(json+strlen(json), ",\"mqtt_ip_port\":\"%d\"", config.mqtt_ip_port);
+        sprintf(json+strlen(json), ",\"ssid\":\"%s\"", ssid.c_str());
         sprintf(json+strlen(json), ",\"span\":\"%d\"", config.temperature_span);
         sprintf(json+strlen(json), ",\"timeout\":\"%d\"", config.display_timeout);
         sprintf(json+strlen(json), ",\"out_temp\":\"%d\"", config.out_temp);
@@ -1149,12 +1195,31 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         }
         else if (strncmp(ptr,"save",4) == 0) {
           Serial.println(F("save setup"));
-          const char *target = "span";
+          
+          const char *target = "host_name";
           char *ptr = strstr((char *)payload, target) + strlen(target)+3;
+          char *end = strchr(ptr, '\"');
+          memcpy(config.host_name, ptr, (end-ptr));
+          config.host_name[end-ptr] = '\0';
+
+          target = "use_mqtt";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.use_mqtt = strtol(ptr, &ptr, 10);
+
+          target = "mqtt_ip_addr";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          end = strchr(ptr, '\"');
+          memcpy(config.mqtt_ip_addr, ptr, (end-ptr));
+          config.mqtt_ip_addr[end-ptr] = '\0';
+
+          target = "mqtt_ip_port";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.mqtt_ip_port = strtol(ptr, &ptr, 10);
+
+          target = "span";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.temperature_span = strtol(ptr, &ptr, 10);
 
-          char *end;
-  
           target = "timeout";
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.display_timeout = strtol(ptr, &ptr, 10);
@@ -1213,6 +1278,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
           memcpy(config.log_url, ptr, (end-ptr));
           config.log_url[end-ptr] = '\0';
 
+//    Serial.printf("host_name %s\n", config.host_name);
+//    Serial.printf("use_mqtt %d\n", config.use_mqtt);
+//    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
+//    Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
 //    Serial.printf("temperature_span %d\n", config.temperature_span);
 //    Serial.printf("display_timeout %d\n", config.display_timeout);
 //    Serial.printf("out_temp %d\n", config.out_temp);
@@ -1245,11 +1314,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   }
 }
 
+
 void sendWeb(const char *command, const char *value) {
   char json[128];
   sprintf(json, "{\"command\":\"%s\",\"value\":\"%s\"}", command, value);
   webSocket.sendTXT(webClient, json, strlen(json));
 }
+
 
 void setupButtons(void) {
   numButtons = sizeof(buttonPins)/sizeof(buttonPins[0]);
@@ -1266,6 +1337,7 @@ void setupButtons(void) {
   println(F("buttons: setup"));
 }
 
+
 void setupRelays(void) {
 #ifdef LATCH_RELAYS
   println(F("using LATCH RELAYS"));
@@ -1280,6 +1352,7 @@ void setupRelays(void) {
 
   println(F("relays: setup"));
 }
+
 
 void relaysOff(void) {
 #ifdef LATCH_RELAYS
@@ -1297,16 +1370,13 @@ void relaysOff(void) {
   Serial.println(F("relaysOff"));
 }
 
+
 void setupMotion(void) {
   println(F("motion: setup"));
 }
 
+
 void loop(void) {
-  if (isUploading) {
-    server.handleClient();
-    return;
-  }
-  
   if (!isSetup)
     return;
 
@@ -1342,8 +1412,18 @@ void loop(void) {
   checkButtons();
 
   webSocket.loop();
-
   server.handleClient();
+  MDNS.update();
+  
+  // mqtt
+  if (config.use_mqtt) {
+    if (!client.connected()) {
+      reconnect();
+    }
+    client.loop();
+  }
+
+  ArduinoOTA.handle();
 
   if (config.out_temp) {
     if (numDevices == 1) {
@@ -1352,6 +1432,7 @@ void loop(void) {
     }
   }
 }
+
 
 void checkClientConnection(void) {
   if (airTempClient == NULL)
@@ -1372,6 +1453,7 @@ void checkClientConnection(void) {
 unsigned long lastFlashTime = 0;
 bool isFlash = false;
 
+
 void flashTime(unsigned long time) {
   // the temperature sensor blocks the app from running while it is reading.
   // so, it may make the flash look off every time it is being checked
@@ -1384,6 +1466,7 @@ void flashTime(unsigned long time) {
       printTime(false, true, false);
   }
 }
+
 
 void checkMotion(unsigned long time) {
   Wire.requestFrom(MUX, 1); 
@@ -1400,6 +1483,7 @@ void checkMotion(unsigned long time) {
     }
   }
 }
+
 
 void checkTime(unsigned long time) {
   int minutes = minute();
@@ -1422,6 +1506,7 @@ void checkTime(unsigned long time) {
     everyFiveMinutes();
 }
 
+
 void everyFiveMinutes(void) {
   if (config.out_temp) {
     // get the outside temperature, unless we are using a sensor outside
@@ -1436,6 +1521,7 @@ void everyFiveMinutes(void) {
   if (lastTemp != TEMP_ERROR && lastOutsideTemp != TEMP_ERROR)
     logTemperature(lastTemp, lastOutsideTemp);
 }
+
 
 void checkTemperature(unsigned long time) {
   if (time - lastTempRequest >= delayInMillis) // waited long enough??
@@ -1455,7 +1541,9 @@ void checkTemperature(unsigned long time) {
   }
 }
 
+
 int lastSentTargetTemperature = TEMP_ERROR;
+
 
 void checkTemperature(void) {
   float tempF = sensors.getTempF((config.swap_sensors == 0) ? thermometer1 : thermometer2);
@@ -1479,6 +1567,7 @@ void checkTemperature(void) {
   checkUnit();
 }
 
+
 void checkOutsideTemperature(void) {
   float tempF = sensors.getTempF((config.swap_sensors == 0) ? thermometer2 : thermometer1);
   tempF = (float)round(tempF*10)/10.0;
@@ -1488,6 +1577,7 @@ void checkOutsideTemperature(void) {
   lastOutsideTemp = tempF;
   printOutsideTemperature(true);
 }
+
 
 void setTextSize(int size) {
 #ifdef FONTS
@@ -1502,6 +1592,7 @@ void setTextSize(int size) {
 #endif
 }
 
+
 void eraseTime(void) {
   if (isDisplayOn) {
     setTextSize(2);
@@ -1514,7 +1605,6 @@ void eraseTime(void) {
   }
 }
 
-const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
   int dayOfWeek = weekday()-1;
@@ -1556,6 +1646,7 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
     checkProgram(dayOfWeek, hours, minutes);
 }
 
+
 byte getProgramForDay(int day) {
   // day: Sun = 0, Mon = 1, etc
   // convert day to a dayMask
@@ -1578,6 +1669,7 @@ byte getProgramForDay(int day) {
   Serial.println(day);
   return 0;  
 }
+
 
 void checkProgram(int day, int h, int m) {
   if (config.mode == OFF) {
@@ -1638,7 +1730,9 @@ void checkProgram(int day, int h, int m) {
   }
 }
 
+
 int outsideTempWidth = 0;
+
 
 void eraseOutsideTemperature(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
@@ -1658,6 +1752,7 @@ void eraseOutsideTemperature(bool isDisplay) {
     sendWeb("outsideTemp", "");  
   }
 }
+
 
 void printOutsideTemperature(bool isDisplay) {
   if (!config.out_temp)
@@ -1745,6 +1840,7 @@ void printCurrentTemperature(bool isDisplay) {
   }
 }
 
+
 int getTargetTemperature(void) {
   if (lastTemp == TEMP_ERROR )
     return TEMP_ERROR;
@@ -1778,6 +1874,7 @@ int getTargetTemperature(void) {
   return lastTargetTemperature;
 }
 
+
 void printTargetTemperature(bool isDisplay) {
   if (lastTargetTemperature == TEMP_ERROR)
     return;
@@ -1808,6 +1905,7 @@ void printTargetTemperature(bool isDisplay) {
   }
 }
 
+
 void printModeState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
     display.setTextColor(GREEN, BLACK);
@@ -1825,6 +1923,7 @@ void printModeState(bool isDisplay) {
   }
 }
 
+
 void printFanState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
     display.setTextColor(GREEN, BLACK);
@@ -1841,6 +1940,7 @@ void printFanState(bool isDisplay) {
     sendWeb("fan", buf);
   }
 }
+
 
 void printRunState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
@@ -1865,17 +1965,20 @@ void printRunState(bool isDisplay) {
   }
 }
 
+
 int getStringWidth(const char* buf) {
   // cpd...not working
 //  return display.getStringWidth(buf);
   return 10;
 }
 
+
 int getFontHeight() {
   // cpd...not working
 //  return display.getFontHeight();
   return 8;
 }
+
 
 void printProgramState(byte p_program, byte p_time, bool isDisplay) {
   if (last_p_program == p_program && last_p_time == p_time && !isForcePrint)
@@ -1909,6 +2012,7 @@ void printProgramState(byte p_program, byte p_time, bool isDisplay) {
     }
   }
 }
+
 
 void checkButtons(void) {
   if (testClient != -1 && testAddr != -1) {
@@ -1966,6 +2070,7 @@ void checkButtons(void) {
   }
 }
 
+
 void doButton(int pin) {
   lastButtonPressTime = millis();
   
@@ -1988,6 +2093,7 @@ void doButton(int pin) {
   }
 }
 
+
 void doUp(void) {
   switch(screen) {
     case MAIN:
@@ -1999,6 +2105,7 @@ void doUp(void) {
   }
 }
 
+
 void doDown(void) {
   switch(screen) {
     case MAIN:
@@ -2009,6 +2116,7 @@ void doDown(void) {
       break;
   }
 }
+
 
 void doEnter(void) {
   switch(screen) {
@@ -2022,6 +2130,7 @@ void doEnter(void) {
       break;
   }
 }
+
 
 void doMenuEnter(void) {
   switch(selectedMenuItem) {
@@ -2044,6 +2153,7 @@ void doMenuEnter(void) {
   }
 }
 
+
 void drawMainScreen(void) {
   screen = MAIN;
 
@@ -2063,8 +2173,10 @@ void drawMainScreen(void) {
   checkUnit();
 }
 
+
 #define BUTTON_WIDTH 128
 #define BUTTON_HEIGHT 30
+
 
 void setSelectedMenuItem(int item) {
   if (item < MODE_BUTTON) item = EXIT_BUTTON;
@@ -2074,6 +2186,7 @@ void setSelectedMenuItem(int item) {
   
   drawMenu();
 }
+
 
 void drawMenu(void) {
   // display our ip address
@@ -2086,6 +2199,7 @@ void drawMenu(void) {
   drawButton("Fan:", fanNames[config.fan], 1, selectedMenuItem);
   drawButton("Exit", 2, selectedMenuItem, 2, 0, 12);
 }
+
 
 void drawButton(const char *s, int i, int sel, int row, int col, int width) {
   int color = (i == sel) ? RED : GREEN;
@@ -2126,6 +2240,7 @@ void drawButton(const char *s1, const char *s2, int i, int sel) {
   display.drawRect(0,y,BUTTON_WIDTH,BUTTON_HEIGHT,color);
 }
 
+
 void setTargetTemp(int newTemp) {
   if (config.mode == OFF)
     return;
@@ -2146,6 +2261,7 @@ void setTargetTemp(int newTemp) {
   checkUnit();
 }
 
+
 void relayOn(int which) {
 #ifdef LATCH_RELAYS
   byte value = muxState;
@@ -2162,6 +2278,7 @@ void relayOn(int which) {
 
   Serial.printf("relay on %d\n", which);
 }
+
 
 void checkUnit(void) {
   // turn the unit on or off if needed
@@ -2251,16 +2368,19 @@ void checkUnit(void) {
     printRunState(true);
 }
 
+
 #define MAGIC_NUM   0xB1
 
 #define MAGIC_NUM_ADDRESS      0
 #define CONFIG_ADDRESS         1
 #define PROGRAM_ADDRESS        CONFIG_ADDRESS + sizeof(config)
 
+
 void set(char *name, const char *value) {
   for (int i=strlen(value); i >= 0; --i)
     *(name++) = *(value++);
 }
+
 
 void loadConfig(void) {
   int magicNum = EEPROM.read(MAGIC_NUM_ADDRESS);
@@ -2272,6 +2392,10 @@ void loadConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
     Serial.printf("using default config\n");
+    set(config.host_name, HOST_NAME);
+    set(config.mqtt_ip_addr, MQTT_IP_ADDR);
+    config.mqtt_ip_port = MQTT_IP_PORT;
+    config.use_mqtt = 0;
     config.mode = OFF;
     config.fan = AUTO;
     config.temperature_span = 7;
@@ -2299,6 +2423,10 @@ void loadConfig(void) {
   lastTemp = TEMP_ERROR;  
   lastOutsideTemp = TEMP_ERROR;  
 
+//  Serial.printf("host_name %s\n", config.host_name);
+//  Serial.printf("use_mqtt %d\n", config.use_mqtt);
+//  Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
+//  Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
 //  Serial.printf("mode %d\n", config.mode);
 //  Serial.printf("fan %d\n", config.fan);
 //  Serial.printf("temperature_span %d\n", config.temperature_span);
@@ -2316,6 +2444,7 @@ void loadConfig(void) {
 //  Serial.printf("log_url %s\n", config.log_url);
 }
 
+
 void loadProgramConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
@@ -2331,6 +2460,7 @@ void loadProgramConfig(void) {
   }
 }
 
+
 void saveConfig(void) {
   isPromModified = false;
   update(MAGIC_NUM_ADDRESS, MAGIC_NUM);
@@ -2344,6 +2474,7 @@ void saveConfig(void) {
     EEPROM.commit();
 }
 
+
 void saveProgramConfig(void) {
   isPromModified = false;
   Serial.printf("saving programs to eeprom\n");
@@ -2356,11 +2487,81 @@ void saveProgramConfig(void) {
     EEPROM.commit();
 }
 
+
 void update(int addr, byte data) {
   if (EEPROM.read(addr) != data) {
     EEPROM.write(addr, data);
     isPromModified = true;
   }
+}
+
+
+void setupOta(void) {
+  // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname(config.host_name);
+
+  // No authentication by default
+  // ArduinoOTA.setPassword("admin");
+
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    const char *msg = "Unknown Error";
+    if (error == OTA_AUTH_ERROR) {
+      msg = "Auth Failed";
+    } else if (error == OTA_BEGIN_ERROR) {
+      msg = "Begin Failed";
+    } else if (error == OTA_CONNECT_ERROR) {
+      msg = "Connect Failed";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      msg = "Receive Failed";
+    } else if (error == OTA_END_ERROR) {
+      msg = "End Failed";
+    }
+    Serial.println(msg);
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("Arduino OTA ready");
+
+  char host[20];
+  sprintf(host, "%s-webupdate", config.host_name);
+  MDNS.begin(host);
+  httpUpdater.setup(&server);
+  MDNS.addService("http", "tcp", 80);
+  Serial.println("Web OTA ready");
+}
+
+
+void setupMqtt() {
+  client.setServer(config.mqtt_ip_addr, config.mqtt_ip_port);
+  client.setCallback(callback);
 }
 
 
@@ -2598,41 +2799,6 @@ void gotOutsideTemperature(float tempF) {
 }
 
 
-void setUpOta(void) {
-  server.on("/update", HTTP_POST, [](){
-    server.sendHeader("Connection", "close");
-    server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.send(200, "text/plain", (Update.hasError())?"FAIL":"OK");
-    ESP.restart();
-  },[](){
-    HTTPUpload& upload = server.upload();
-    if(upload.status == UPLOAD_FILE_START){
-      Serial.setDebugOutput(true);
-      Serial.printf("Update filename: %s\n", upload.filename.c_str());
-      uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-      if(!Update.begin(maxSketchSpace)){//start with max available size
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_WRITE){
-      Serial.printf("uploaded: %d\n", upload.totalSize);
-      if(Update.write(upload.buf, upload.currentSize) == upload.currentSize){
-        // update the total percent complete on the web page
-      }
-      else {
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_END){
-      if(Update.end(true)){ //true to set the size to the current progress
-        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
-      } else {
-        Update.printError(Serial);
-      }
-      Serial.setDebugOutput(false);
-    }
-    yield();
-  });
-}
-
 //format bytes
 String formatBytes(size_t bytes){
   if (bytes < 1024){
@@ -2645,6 +2811,7 @@ String formatBytes(size_t bytes){
     return String(bytes/1024.0/1024.0/1024.0)+"GB";
   }
 }
+
 
 String getContentType(String filename){
   if(server.hasArg("download")) return "application/octet-stream";
@@ -2663,6 +2830,7 @@ String getContentType(String filename){
   return "text/plain";
 }
 
+
 bool handleFileRead(String path){
   Serial.println("handleFileRead: " + path);
   if(path.endsWith("/")) path += "index.htm";
@@ -2678,6 +2846,7 @@ bool handleFileRead(String path){
   }
   return false;
 }
+
 
 void handleFileUpload_edit(){
   HTTPUpload& upload = server.upload();
@@ -2698,6 +2867,7 @@ void handleFileUpload_edit(){
   }
 }
 
+
 void handleFileDelete(){
   if(server.args() == 0) return server.send(500, "text/plain", "BAD ARGS");
   String path = server.arg(0);
@@ -2711,6 +2881,7 @@ void handleFileDelete(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileCreate(){
   if(server.args() == 0)
@@ -2730,6 +2901,7 @@ void handleFileCreate(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileList() {
   if(!server.hasArg("dir")) {server.send(500, "text/plain", "BAD ARGS"); return;}
@@ -2757,24 +2929,26 @@ void handleFileList() {
   server.send(200, "text/json", output);
 }
 
-//void countRootFiles(void) {
-//  int num = 0;
-//  size_t totalSize = 0;
-//  Dir dir = SPIFFS.openDir("/");
-//  while (dir.next()) {
-//    ++num;
-//    String fileName = dir.fileName();
-//    size_t fileSize = dir.fileSize();
-//    totalSize += fileSize;
-//    Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), formatBytes(fileSize).c_str());
-//  }
-//  Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
-//}
+
+void countRootFiles(void) {
+  int num = 0;
+  size_t totalSize = 0;
+  Dir dir = SPIFFS.openDir("/");
+  while (dir.next()) {
+    ++num;
+    String fileName = dir.fileName();
+    size_t fileSize = dir.fileSize();
+    totalSize += fileSize;
+    Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), formatBytes(fileSize).c_str());
+  }
+  Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
+}
+
 
 void setupWebServer(void) {
   SPIFFS.begin();
 
-//  countRootFiles();
+  countRootFiles();
   
   //list directory
   server.on("/list", HTTP_GET, handleFileList);
@@ -2794,8 +2968,6 @@ void setupWebServer(void) {
   //second callback handles file uploads at that location
   server.on("/edit", HTTP_POST, [](){ server.send(200, "text/plain", ""); }, handleFileUpload_edit);
 
-  setUpOta();
-
   //called when the url is not defined here
   //use it to load content from SPIFFS
   server.onNotFound([](){
@@ -2806,6 +2978,54 @@ void setupWebServer(void) {
   server.begin();
 
   Serial.println(F("HTTP server started"));
+}
+
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+//    // Create a random client ID
+//    String clientId = "ESP8266Client-";
+//    clientId += String(random(0xffff), HEX);
+//    // Attempt to connect
+//    if (client.connect(clientId.c_str())) {
+    if (client.connect(config.host_name)) {
+      Serial.println("connected");
+      // ... and resubscribe
+      char topic[30];
+      sprintf(topic, "%s/command", config.host_name);
+      client.subscribe(topic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // only topic we get is <host_name>/command or nightlight
+  
+  char value[12];
+  memcpy(value, payload, length);
+  value[length] = '\0';
+  Serial.printf("Message arrived [%s] %s\n", topic, value);
+
+//  if (strcmp(topic, "command") == 0) {
+//    // cpd...do something
+//      
+//    // also send to main display
+//    if (webClient != -1) {
+//      sendWeb("code", value);
+//    }
+//  }
+//  else {
+//    Serial.printf("Unknown topic\n");
+//  }
 }
 
 
