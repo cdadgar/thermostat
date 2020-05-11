@@ -199,10 +199,6 @@ const char WUNDERGROUND_REQ3[] = ".json HTTP/1.1\r\n"
     "Connection: close\r\n"
     "\r\n";
 
-#define LOGGING_IP_ADDR "192.168.1.210"
-#define LOGGING_IP_PORT 80
-#define LOG_URL "http://cpd.us.to:90/temp/"
-
 #define TEMP_IP_ADDR "192.168.1.16"
 #define TEMP_IP_PORT 9090
 
@@ -381,6 +377,12 @@ byte mode;
 #define AUTO 0
 const char *fanNames[] = { "Auto", "On    " };
 
+// actions
+#define SYSTEM_OFF    'o'
+#define SYSTEM_FAN    'f'
+#define SYSTEM_HEAT   'h'
+#define SYSTEM_COOL   'c'
+
 bool isFanOn;
 bool isCompressorOn;
 bool isReversingValueOn;
@@ -536,10 +538,6 @@ typedef struct {
   int  temp_ip_port;
   char wu_key[20];
   char wu_location[20];
-  byte use_logging;
-  char logging_ip_addr[17];
-  byte logging_ip_port;
-  char log_url[40];
 } configType;
 
 configType config;
@@ -1059,7 +1057,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         isForcePrint = true;
         printProgramState(last_p_program, last_p_time, false);
         printTime(false, false, false);
-        sendWeb("log_url", config.log_url);
         isForcePrint = false;
       }
       else if (strcmp((char *)payload,"/program") == 0) {
@@ -1107,10 +1104,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         sprintf(json+strlen(json), ",\"temp_ip_port\":\"%d\"", config.temp_ip_port);
         sprintf(json+strlen(json), ",\"key\":\"%s\"", config.wu_key);
         sprintf(json+strlen(json), ",\"location\":\"%s\"", config.wu_location);
-        sprintf(json+strlen(json), ",\"use_logging\":\"%d\"", config.use_logging);
-        sprintf(json+strlen(json), ",\"logging_ip_addr\":\"%s\"", config.logging_ip_addr);
-        sprintf(json+strlen(json), ",\"logging_ip_port\":\"%d\"", config.logging_ip_port);
-        sprintf(json+strlen(json), ",\"log_url\":\"%s\"", config.log_url);
         strcpy(json+strlen(json), "}");
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(setupClient, json, strlen(json));
@@ -1258,26 +1251,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
           memcpy(config.wu_location, ptr, (end-ptr));
           config.wu_location[end-ptr] = '\0';
 
-          target = "use_logging";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.use_logging = strtol(ptr, &ptr, 10);
-          
-          target = "logging_ip_addr";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          end = strchr(ptr, '\"');
-          memcpy(config.logging_ip_addr, ptr, (end-ptr));
-          config.logging_ip_addr[end-ptr] = '\0';
-
-          target = "logging_ip_port";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.logging_ip_port = strtol(ptr, &ptr, 10);
-  
-          target = "log_url";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          end = strchr(ptr, '\"');
-          memcpy(config.log_url, ptr, (end-ptr));
-          config.log_url[end-ptr] = '\0';
-
 //    Serial.printf("host_name %s\n", config.host_name);
 //    Serial.printf("use_mqtt %d\n", config.use_mqtt);
 //    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
@@ -1291,10 +1264,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 //    Serial.printf("temp_ip_port %d\n", config.temp_ip_port);
 //    Serial.printf("wu_key %s\n", config.wu_key);
 //    Serial.printf("wu_location %s\n", config.wu_location);
-//    Serial.printf("use_logging %d\n", config.use_logging);
-//    Serial.printf("logging_ip_addr %s\n", config.logging_ip_addr);
-//    Serial.printf("logging_ip_port %d\n", config.logging_ip_port);
-//    Serial.printf("log_url %s\n", config.log_url);
           saveConfig();
         }
       }
@@ -2285,7 +2254,7 @@ void checkUnit(void) {
   if (config.mode == OFF) {
     if (isCompressorOn || isReversingValueOn) {
       relaysOff();
-      logAction('o');
+      logAction(SYSTEM_OFF);
       isCompressorOn = false;
       isReversingValueOn = false;
       isFanOn = false;
@@ -2293,14 +2262,14 @@ void checkUnit(void) {
     if (config.fan == AUTO) {
       if (isFanOn) {
         relaysOff();
-        logAction('o');
+        logAction(SYSTEM_OFF);
         isFanOn = false;
       }
     }
     else {
       if (!isFanOn) {
         relayOn(FAN);
-        logAction('f');
+        logAction(SYSTEM_FAN);
         isFanOn = true;
       }
     }
@@ -2339,7 +2308,7 @@ void checkUnit(void) {
     if (isOn) {
       if (!isCompressorOn) {
         relayOn(COMPRESSOR);
-        logAction((mode == HEAT) ? 'h' : 'c');
+        logAction((mode == HEAT) ? SYSTEM_HEAT : SYSTEM_COOL);
         isCompressorOn = true;
       }
       if (!isFanOn) {
@@ -2356,7 +2325,7 @@ void checkUnit(void) {
     else {
       if (isCompressorOn || isReversingValueOn || isFanOn) {
         relaysOff();
-        logAction('o');
+        logAction(SYSTEM_OFF);
         isCompressorOn = false;
         isReversingValueOn = false;
         isFanOn = false;
@@ -2407,10 +2376,6 @@ void loadConfig(void) {
     config.temp_ip_port = TEMP_IP_PORT;
     set(config.wu_key, WU_API_KEY);
     set(config.wu_location, WU_LOCATION);
-    config.use_logging = 1;
-    set(config.logging_ip_addr, LOGGING_IP_ADDR);
-    config.logging_ip_port = LOGGING_IP_PORT;
-    set(config.log_url, LOG_URL);
 
     saveConfig();
   }
@@ -2438,10 +2403,6 @@ void loadConfig(void) {
 //  Serial.printf("temp_ip_port %d\n", config.temp_ip_port);
 //  Serial.printf("wu_key %s\n", config.wu_key);
 //  Serial.printf("wu_location %s\n", config.wu_location);
-//  Serial.printf("use_logging %d\n", config.use_logging);
-//  Serial.printf("logging_ip_addr %s\n", config.logging_ip_addr);
-//  Serial.printf("logging_ip_port %d\n", config.logging_ip_port);
-//  Serial.printf("log_url %s\n", config.log_url);
 }
 
 
@@ -2565,179 +2526,39 @@ void setupMqtt() {
 }
 
 
-const char http_path_temperature[] = "/temp/remote/insertTemperature.php";
-const char http_path_action[] = "/temp/remote/insertAction.php";
-const char http_path_target[] = "/temp/remote/insertTarget.php";
-
-
 void logTemperature(float inside, float outside) {
-  if (!config.use_logging)
-    return;
-
-  AsyncClient* aclient = new AsyncClient();
-
-  float* data = new float[2];
-  data[0] = inside;
-  data[1] = outside;
-  
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    
-    float* data = (float*) obj;
-    float inside = data[0];
-    float outside = data[1];
-    free(obj);
-    
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_temperature );
-    c->write("?inside=");
-    c->write( String(inside).c_str() );
-    c->write("&");
-    c->write("outside=");
-    c->write( String(outside).c_str() );
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-    Serial.print("logged temperature: ");
-    Serial.print(inside,1);
-    Serial.print(" ");
-    Serial.println(outside,1);
-  }, data);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logTemperature [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-//  unsigned long t = millis();
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-//    Serial.printf("connect failed %d\n", (millis() - t));
-    free(aclient);
-    free(data);
+  if (config.use_mqtt) {
+    // mqtt
+    char topic[30];
+    sprintf(topic, "%s/temperature", config.host_name);
+    char json[128];
+    sprintf(json, "{\"inside\":\"%f\",\"outside\":\"%f\"}",
+      inside, outside);
+    client.publish(topic, json);
   }
 }
 
 
-void logAction(char state) {
-  if (!config.use_logging)
-    return;
-    
-  char* str = new char[2];
-  str[0] = state;
-  str[1] = '\0';
-
-  AsyncClient* aclient = new AsyncClient();
-
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_action );
-    c->write("?state=");
-    char* str = (char*) obj;
-    c->write( str );
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-    Serial.print("logged action: ");
-    Serial.println(str);
-    free(str);
-  }, str);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logAction [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-    free(aclient);
-    free(str);
+void logAction(char action) {
+  if (config.use_mqtt) {
+    // mqtt
+    char topic[30];
+    sprintf(topic, "%s/action", config.host_name);
+    char buf[10];
+    sprintf(buf, "%c", action);
+    client.publish(topic, buf);
   }
 }
 
 
 void logTarget(int temperature) {
-  if (!config.use_logging)
-    return;
-
-  if (temperature == TEMP_ERROR)
-    return;
-    
-  int* data = new int[1];
-  data[0] = temperature;
-
-  AsyncClient* aclient = new AsyncClient();
-
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    
-    int* data = (int*) obj;
-    int temperature = data[0];
-    free(obj);
-    
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_target );
-    c->write("?temperature=");
-    c->write( String(temperature).c_str() );
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-    Serial.print("logged target: ");
-    Serial.println(temperature);
-  }, data);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logTarget [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-    free(aclient);
-    free(data);
+  if (config.use_mqtt) {
+    // mqtt
+    char topic[30];
+    sprintf(topic, "%s/target", config.host_name);
+    char buf[10];
+    sprintf(buf, "%d", temperature);
+    client.publish(topic, buf);
   }
 }
 
@@ -3008,24 +2829,45 @@ void reconnect() {
 
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  // only topic we get is <host_name>/command or nightlight
+  // only topic we get is <host_name>/command
   
+  // strip off the hostname from the topic
+  topic += strlen(config.host_name) + 1;
+    
   char value[12];
   memcpy(value, payload, length);
   value[length] = '\0';
   Serial.printf("Message arrived [%s] %s\n", topic, value);
 
-//  if (strcmp(topic, "command") == 0) {
-//    // cpd...do something
-//      
-//    // also send to main display
-//    if (webClient != -1) {
-//      sendWeb("code", value);
-//    }
-//  }
-//  else {
-//    Serial.printf("Unknown topic\n");
-//  }
+  if (strcmp(topic, "command") == 0) {
+    char action = *value;
+    if (action == SYSTEM_OFF) {
+      // cpd
+//      config.mode = RUN;
+//      modeChange(false);
+    }
+    else if (action == SYSTEM_FAN) {
+      // cpd
+//      config.mode = OFF;
+//      modeChange(false);
+    }
+    else if (action == SYSTEM_HEAT) {
+      // cpd
+//      config.mode = OFF;
+//      modeChange(false);
+    }
+    else if (action == SYSTEM_COOL) {
+      // cpd
+//      config.mode = OFF;
+//      modeChange(false);
+    }
+    else {
+      Serial.printf("Unknown action: %c\n", action);
+    }
+  }
+  else {
+    Serial.printf("Unknown topic: %s\n", topic);
+  }
 }
 
 
