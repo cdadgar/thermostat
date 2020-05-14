@@ -1,6 +1,6 @@
-//#define BREADBOARD
-//#define BUILD_ONE        // master bedroom
-#define BUILD_TWO        // gameroom
+//#define BREADBOARD   // doesn't compile
+//#define BUILD_ONE   // builds!     // master bedroom
+#define BUILD_TWO  // doesn't compile      // gameroom
 
 
 /*
@@ -29,8 +29,6 @@
 
 /*
  * todo:
- *  - fix mfgfx (getstringwidth and getfont height not working)
- *  - test with a variety of displays
  *  - add ota
  *  - add mqtt
  */
@@ -46,10 +44,8 @@
  * TimeLib - https://github.com/PaulStoffregen/Time (git)
  * Timezone - https://github.com/JChristensen/Timezone (git)
  * ArduinoJson - https://github.com/bblanchon/ArduinoJson  (git)
- * 
- * Adafruit_mfGFX - https://github.com/pkourany/Arduino_Adafruit_mfGFX_Library (git)  (not working?)
+ * Adafruit_mfGFX - https://github.com/canadaduane/Adafruit_mfGFX
  * Adafruit_GFX.h - https://github.com/adafruit/Adafruit-GFX-Library (git)
- * 
  * Adafruit_ILI9341 - https://github.com/adafruit/Adafruit_ILI9341 (git)
  * TFT_ILI9163C.h - https://github.com/PaulStoffregen/TFT_ILI9163C
  * Adafruit_ST7735.h - https://github.com/adafruit/Adafruit-ST7735-Library
@@ -144,16 +140,16 @@ const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 // --------------------------------------------
 
 // display includes
-
-// cpd...these need to mfgfx library to work...can't get it to compile
-//#define FONTS
-//#define font_arial_8   1
-//#define font_arial_16  2
-//#define font_arial_24  3
+// only define the fonts we want to use
+#define FONTS
+// cpd...fontHeight and fontWidth added to Adafruit_mfGFX.h
+#define font_arial_8   1   // cpd...had to modify Adafruit_mfGFX.h to add the include for font_arial_8.pt (was just missing?)
+#define font_arial_16  2   // cpd...was this custom, and I added it myself?
+#define font_arial_24  3   // cpd...was this custom, and I added it myself?
 
 #include <SPI.h>
-#include <Adafruit_GFX.h>
-// cpd...working? #include <Adafruit_mfGFX.h>
+#include <Adafruit_mfGFX.h>
+
 #ifdef DISPLAY_14
 #include <TFT_ILI9163C.h>
 #define GREEN 0x07E0
@@ -1936,16 +1932,16 @@ void printRunState(bool isDisplay) {
 
 
 int getStringWidth(const char* buf) {
-  // cpd...not working
-//  return display.getStringWidth(buf);
-  return 10;
+  int16_t w = 0;
+  for (; *buf != '\0'; buf++) {
+    w += display.fontWidth(*buf);
+  }
+  return w;
 }
 
 
 int getFontHeight() {
-  // cpd...not working
-//  return display.getFontHeight();
-  return 8;
+  return display.fontHeight();
 }
 
 
@@ -2873,41 +2869,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 /*
 cpd...todo
-
-
-log to pogoplug database
-database is running
-httpd is running
-php is running
-
-docs at /srv/http
-httpd logfile at /var/log/httpd
-http://pogoplug2/test.html
-rpi temperature sensor page works:   http://pogoplug2/temp
-adding data to it: 
-insert into temps (inside,outside) values (77.9, 81.0)
-
-insert using a url:
-http://pogoplug2/temp/remote/insertTemperature.php?inside=68.1&outside=85.2
-esp8266 must use pogoplug2 ip address
-
-
-create table action (
-  ts timestamp DEFAULT CURRENT_TIMESTAMP,
-  state char
-);
-insert into action (state) values ('c')
-
-create table target (
-  ts timestamp DEFAULT CURRENT_TIMESTAMP,
-  temperature int
-);
-insert into target (temperature) values (78)
-
-
-
-program page, default button doesn't load
-
 
 
 outside temp doesn't erase correctly (line 1490)
