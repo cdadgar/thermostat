@@ -1,6 +1,6 @@
 //#define BREADBOARD   // doesn't compile
-//#define BUILD_ONE   // builds!     // master bedroom
-#define BUILD_TWO  // doesn't compile      // gameroom
+#define BUILD_ONE   // builds!     // master bedroom
+//#define BUILD_TWO  // doesn't compile      // gameroom
 
 
 /*
@@ -141,14 +141,18 @@ const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // display includes
 // only define the fonts we want to use
-#define FONTS
+// cpd...fix this
+//#define FONTS
 // cpd...fontHeight and fontWidth added to Adafruit_mfGFX.h
 #define font_arial_8   1   // cpd...had to modify Adafruit_mfGFX.h to add the include for font_arial_8.pt (was just missing?)
 #define font_arial_16  2   // cpd...was this custom, and I added it myself?
 #define font_arial_24  3   // cpd...was this custom, and I added it myself?
 
 #include <SPI.h>
-#include <Adafruit_mfGFX.h>
+
+// cpd...fix this
+//#include <Adafruit_mfGFX.h>
+#include <Adafruit_GFX.h>
 
 #ifdef DISPLAY_14
 #include <TFT_ILI9163C.h>
@@ -1932,16 +1936,18 @@ void printRunState(bool isDisplay) {
 
 
 int getStringWidth(const char* buf) {
-  int16_t w = 0;
-  for (; *buf != '\0'; buf++) {
-    w += display.fontWidth(*buf);
-  }
-  return w;
+//  int16_t w = 0;
+//  for (; *buf != '\0'; buf++) {
+//    w += display.fontWidth(*buf);
+//  }
+//  return w;
+  return 6;
 }
 
 
 int getFontHeight() {
-  return display.fontHeight();
+//  return display.fontHeight();
+  return 10;
 }
 
 
