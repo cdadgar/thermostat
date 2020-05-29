@@ -1,6 +1,9 @@
-//#define BREADBOARD   // doesn't compile
-#define BUILD_ONE   // builds!     // master bedroom
-//#define BUILD_TWO  // doesn't compile      // gameroom
+#define BREADBOARD
+//#define BUILD_ONE   // master bedroom
+//#define BUILD_TWO   // gameroom
+
+// breadboard with a wemos, and nothing else
+//#define WEMOS
 
 
 /*
@@ -12,7 +15,7 @@
  * OR
  * module is a esp7
  * flash size set to 1M (128KB SPIFFS) or 1MB (FS:128KB OTA:~438KB) (latest esp board sw uses this)
- * if this enough to do ota?  (esp-07s has 4MB of memory)
+ * if this enough to do ota?  (esp-07s has 4MB of memory..have a few of these)
  */
 
 
@@ -29,8 +32,23 @@
 
 /*
  * todo:
- *  - add ota
- *  - add mqtt
+ * tested with wemos and 1.8" display
+ * tested with wemos and 2.2" display
+ * button screen working with larger displays
+ * 
+ * not tested with esp12 and 2.2" display
+ * not tested with esp12 and 1.4" display
+ * 
+ * 
+ * does the time flash mess up the wifi?
+ *  
+ *  
+ * 
+ * 
+ * motion sensor seems very flaky  (use 5v?)
+ * test button screen with small displays
+ *  
+ * fix degree in font file for small font (for outside temp) (optional)
  */
 
 /*
@@ -44,7 +62,6 @@
  * TimeLib - https://github.com/PaulStoffregen/Time (git)
  * Timezone - https://github.com/JChristensen/Timezone (git)
  * ArduinoJson - https://github.com/bblanchon/ArduinoJson  (git)
- * Adafruit_mfGFX - https://github.com/canadaduane/Adafruit_mfGFX
  * Adafruit_GFX.h - https://github.com/adafruit/Adafruit-GFX-Library (git)
  * Adafruit_ILI9341 - https://github.com/adafruit/Adafruit_ILI9341 (git)
  * TFT_ILI9163C.h - https://github.com/PaulStoffregen/TFT_ILI9163C
@@ -139,44 +156,59 @@ const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // --------------------------------------------
 
-// display includes
-// only define the fonts we want to use
-// cpd...fix this
-//#define FONTS
-// cpd...fontHeight and fontWidth added to Adafruit_mfGFX.h
-#define font_arial_8   1   // cpd...had to modify Adafruit_mfGFX.h to add the include for font_arial_8.pt (was just missing?)
-#define font_arial_16  2   // cpd...was this custom, and I added it myself?
-#define font_arial_24  3   // cpd...was this custom, and I added it myself?
-
 #include <SPI.h>
 
-// cpd...fix this
-//#include <Adafruit_mfGFX.h>
 #include <Adafruit_GFX.h>
 
 #ifdef DISPLAY_14
 #include <TFT_ILI9163C.h>
 #define GREEN 0x07E0
 #define RED   0xF800
+#define WIDTH  128
+#define HEIGHT 128
 #endif
 #ifdef DISPLAY_18
 #include <Adafruit_ST7735.h>
 #define BLACK ST7735_BLACK
 #define GREEN ST7735_GREEN
 #define RED   ST7735_RED
+#define WIDTH  128
+#define HEIGHT 160
 #endif
 #ifdef DISPLAY_22
 #include <Adafruit_ILI9341.h>
 #define BLACK ILI9341_BLACK
 #define GREEN ILI9341_GREEN
 #define RED   ILI9341_RED
+#define WIDTH  240
+#define HEIGHT 320
 #endif
 #ifdef DISPLAY_28
 #include <Adafruit_ILI9341.h>
 #define BLACK ILI9341_BLACK
 #define GREEN ILI9341_GREEN
 #define RED   ILI9341_RED
+#define WIDTH  240
+#define HEIGHT 320
 #endif
+
+
+#define ERASE BLACK
+//#define ERASE RED
+
+
+#if defined DISPLAY_22 || defined DISPLAY_28
+// these fonts work well on the larger displays
+#include <Fonts/arial20pt7b.h>
+#include <Fonts/arial30pt7b-final.h>  // numbers only with degree symbol
+#else
+// these fonts work well on the smaller displays
+#include <Fonts/arial12pt7b.h>
+#include <Fonts/arial18pt7b-final.h>  // numbers only with degree symbol
+#endif
+
+const GFXfont *font_set[3];
+int font_height[3];
 
 // --------------------------------------------
 
@@ -282,7 +314,7 @@ Adafruit_ILI9341 display = Adafruit_ILI9341(__CS, __DC);
 
 // gpio 4 is available on the esp-12, but it blinks the blue led when used....weird
 // so use gpio16 instead...tried this, and didn't work...is gpio 1 not usable?
-#define ONE_WIRE_BUS 4
+#define ONE_WIRE_BUS 4    // D2 on wemos
 
 #define TimeBetweenMotionChecks       1000
 #define MenuIdleTime                 10000
@@ -299,8 +331,6 @@ DeviceAddress thermometer2;
 int numDevices;
 
 #define resolution 12
-unsigned long lastTempRequest = 0;
-int delayInMillis = 0;
 
 
 int lastTargetTemperature = TEMP_ERROR;
@@ -315,6 +345,9 @@ boolean isForcePrint = false;
 bool isDisplayOn;
 byte last_p_program = 0;
 byte last_p_time = 0;
+
+// size of the timeout line
+int lastPx;
 
 // --------------------------------------------
 
@@ -363,19 +396,20 @@ const long debounceDelay = 50;    // the debounce time
 // --------------------------------------------
 
 bool isSetup = false;
+bool isTempSetup = false;
 
 #define OFF  0
 #define ON   1
 #define TEMP 2
 #define HOLD 3
-const char *modeNames[] = { "Off    ", "On     ", "Temp", "Hold  " };
+const char *modeNames[] = { "OFF", "ON", "TEMP", "HOLD" };
 #define COOL 0
 #define HEAT 1
 const char *modeStateNames[] = { "Cool", "Heat" };
 byte mode;
 
 #define AUTO 0
-const char *fanNames[] = { "Auto", "On    " };
+const char *fanNames[] = { "Auto", "On" };
 
 // actions
 #define SYSTEM_OFF    'o'
@@ -392,6 +426,7 @@ screenState screen;
 int selectedMenuItem;
 
 unsigned long lastMinutes;
+unsigned long lastSeconds;
 
 #define MODE_BUTTON    0
 #define FAN_BUTTON     1
@@ -543,6 +578,18 @@ typedef struct {
 configType config;
 
 
+uint8_t currentTempWidth = 0;
+uint8_t targetTempWidth = 0;
+uint8_t outsideTempWidth = 0;
+uint8_t dayWidth = 0;
+uint8_t timeWidth = 0;
+uint8_t modeWidth = 0;
+uint8_t fanWidth = 0;
+uint8_t stateWidth = 0;
+uint8_t programWidth = 0;
+const char *lastState = "";
+
+
 void print(const char *str);
 void println(const char *str);
 void print(const __FlashStringHelper *str);
@@ -579,9 +626,10 @@ void relaysOff(void);
 void checkMotion(unsigned long time);
 void checkTime(unsigned long time);
 void checkTemperature(void);
-void checkTemperature(unsigned long time);
+void checkInsideTemperature(void);
+void checkOutsideTemperature(void);
 void checkTemperature(DeviceAddress deviceAddress);
-void flashTime(unsigned long time);
+void flashTime();
 void checkButtons(void);
 void eraseTime(void);
 void everyFiveMinutes(void);
@@ -597,7 +645,6 @@ void setSelectedMenuItem(int item);
 void doMenuEnter(void);
 void drawMenu(void);
 void drawButton(const char *s1, const char *s2, int i, int sel);
-void drawButton(const char *s, int i, int sel, int row, int col, int width);
 void logAction(char state);
 void update(int addr, byte data);
 int showWeather(char *json);
@@ -611,10 +658,12 @@ void checkClientConnection(void);
 
 
 void send(byte addr, byte b) {
+#ifndef WEMOS
   Wire.beginTransmission(addr);
   Wire.write(b);
   Wire.endTransmission();
   muxState = b; 
+#endif
 }
 
 
@@ -625,7 +674,7 @@ void setup(void) {
 
   Wire.begin(SDA,SCL);
   send(MUX, 0xFF);
-
+  
   setupDisplay();
 
 #ifdef BREADBOARD
@@ -658,7 +707,6 @@ void setup(void) {
   loadProgramConfig();
   isMemoryReset = false;
   
-  setupTime();
   setupWebServer();
   setupMqtt();
   setupOta();
@@ -666,14 +714,18 @@ void setup(void) {
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
 
+  setupTime();
+
   setupButtons();
   setupRelays();
   setupMotion();
 
-  if (!setupTempSensor())
-    return;
+  if (setupTempSensor()) {
+    isTempSetup = true;
+  }
 
   lastMinutes = 0;
+  lastSeconds = 0;
   lastMotionReadTime = -TimeBetweenMotionChecks;
 
   lastButtonPressTime = millis();
@@ -763,13 +815,6 @@ void clearScreen(void) {
 
 
 void setCursor(int x, int y) {
-#ifdef DISPLAY_18
-  y += 16;
-#endif
-#ifdef DISPLAY_22
-#endif
-#ifdef DISPLAY_28
-#endif
   display.setCursor(x, y);
 }
 
@@ -797,9 +842,6 @@ void setupDisplay(void) {
   setCursor(0, 0);
   display.setTextColor(GREEN);
   display.setTextSize(1);
-#ifdef FONTS
-  display.setFont(font_arial_8);
-#endif
 
 #ifdef BREADBOARD
 #ifdef DISPLAY_14
@@ -807,22 +849,55 @@ void setupDisplay(void) {
 #endif
 #endif
 
+  // set up fonts
+  font_set[0] = NULL;
+  font_height[0] = 8;
+
+#if defined DISPLAY_22 || defined DISPLAY_28
+  Serial.println(F("large fonts"));
+  font_set[1] = &arial20pt7b;
+  font_set[2] = &arial30pt7b;
+  font_height[1] = 28;
+  font_height[2] = 41;  
+#else
+  Serial.println(F("small fonts"));
+  font_set[1] = &arial12pt7b;
+  font_set[2] = &arial18pt7b;
+  font_height[1] = 17;
+//  font_height[2] = 21;  
+  font_height[2] = 25;  
+  font_width[1] = 12;
+  font_width[2] = 14;  
+  font_width[2] = 20;  
+#endif
+
   displayBacklight(true);
 }
 
 
+void drawTimeoutLine() {
+    if (isDisplayOn) {
+      // draw a line at the bottom that erases during screen timeout
+      display.drawLine(0, HEIGHT-10, WIDTH, HEIGHT-10, GREEN);
+      lastPx = 0;
+    }
+}
+
+
 void displayBacklight(bool isOn) {
-//  Serial.printf("backlight %d\n", isOn);
+  Serial.printf("backlight %d\n", isOn);
   if (isSetup && !isDisplayOn && isOn) {
     // redraw the display before turning it on, so we don't see it flash
     isDisplayOn = true;
     drawMainScreen();
   }
 
+#ifndef WEMOS
   if (isOn)
     send(MUX, muxState & ~LED);
   else
     send(MUX, muxState | LED);
+#endif
 
   isDisplayOn = isOn;
 }
@@ -883,8 +958,6 @@ bool setupTempSensor(void) {
   
   sensors.setWaitForConversion(false);
   sensors.requestTemperatures();
-  delayInMillis = 750 / (1 << (12 - resolution)); 
-  lastTempRequest = millis(); 
 
   return true;
 }
@@ -904,21 +977,27 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   clearScreen();
   setCursor(0, 0);
   display.setTextColor(GREEN);
+  // cpd...font 1 is too small, 2 is too large to display the word "THERMOSTAT"
   setTextSize(1);
+  println(F(""));
   println(F("WiFi Not Configured"));
   println(F("Join this network:"));
+  println(F(""));
   setTextSize(2);
-  println(config.host_name);
+  const char *n = (strlen(config.host_name) > 0) ? config.host_name : HOST_NAME;
+  println(n);
   setTextSize(1);
   println(F("And open a browser to:"));
-  Serial.println(WiFi.softAPIP());
+  println(F(""));
   setTextSize(2);
-  display.println(WiFi.softAPIP());
+  Serial.println(WiFi.softAPIP());
+  display.print(WiFi.softAPIP());
 }
 
 
 bool setupWifi(void) {
-  WiFi.hostname(config.host_name);
+  const char *n = (strlen(config.host_name) > 0) ? config.host_name : HOST_NAME;
+  WiFi.hostname(n);
   
 //  wifiManager.setDebugOutput(false);
   
@@ -935,7 +1014,7 @@ bool setupWifi(void) {
   //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wifiManager.setAPCallback(configModeCallback);
 
-  if(!wifiManager.autoConnect(config.host_name)) {
+  if(!wifiManager.autoConnect(n)) {
     Serial.println(F("failed to connect and hit timeout"));
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
@@ -957,10 +1036,10 @@ void setupTime(void) {
   // time.nist.gov NTP server
   // NTP requests are to port 123
   if (udp->connect(IPAddress(129,6,15,28), 123)) {
-//    Serial.println("UDP connected");
+    Serial.println(F("UDP connected"));
     
     udp->onPacket([](void *arg, AsyncUDPPacket packet) {
-//      Serial.println(F("received NTP packet"));
+      Serial.println(F("received NTP packet"));
       byte *buf = packet.data();
       
       //the timestamp starts at byte 40 of the received packet and is four bytes,
@@ -1340,45 +1419,81 @@ void relaysOff(void) {
 }
 
 
+#ifdef WEMOS
+#define MOTION_PIN 16   // D0
+#endif
+
+
 void setupMotion(void) {
   println(F("motion: setup"));
+#ifdef WEMOS
+  pinMode(MOTION_PIN, INPUT);
+#endif
 }
+
+
+unsigned long lastTime = millis();
 
 
 void loop(void) {
   if (!isSetup)
     return;
 
+  /*
+   * the loop should be called every 1 ot 2 msec
+   * 
+   * reading the 1wire temperature takes 12 msec, but we only read it
+   * once per second...so most loops happen very quickly.
+   * 
+   * drawing large font text on the display can also cause a slow loop.
+   * 
+   * if we have too many slow loops, some services like wifi won't work properly
+   */
   unsigned long time = millis();
+  long delta = time - lastTime;
+  if (delta > 25) {
+    Serial.printf("slow loop: %lu\n", delta);
+  }
+  lastTime = time;
+
 
   // only check the motion sensor every so often
   if ( time - lastMotionReadTime > TimeBetweenMotionChecks ) {
     checkMotion(time);
     lastMotionReadTime = time;
   }
-  
-  if (screen == MAIN) {
-    // turn off the display if idle
-    if (isDisplayOn && ((time - lastButtonPressTime) > (config.display_timeout*1000)) ) {
+
+  unsigned long t = time - lastButtonPressTime;
+  // turn off the display if idle
+  if (isDisplayOn) {
+    // erase some of the timeout line
+    long timeout = (screen == MAIN) ? (config.display_timeout*1000) : MenuIdleTime;
+    int px = t * WIDTH / timeout;
+    if (lastPx != px) {
+      lastPx = px;
+//      Serial.println(px);
+      display.drawLine(WIDTH, HEIGHT-10, WIDTH-px, HEIGHT-10, BLACK);
+    }
+
+    if (t > (config.display_timeout*1000)) {
       displayBacklight(false);
     }
-
-    checkTime(time);
-
-    checkTemperature(time);
-
-    // flash the time if its not set
-    if (!isTimeSet)
-      flashTime(time);
-  }
-  else {
-    // go back to main screen if idle
-    if (time - lastButtonPressTime > MenuIdleTime ) {
-      drawMainScreen();
+    if (screen != MAIN) {
+      // go back to main screen if idle
+      if (t > MenuIdleTime ) {
+        drawMainScreen();
+      }
     }
   }
-  
+
+  checkTime(time);
+
+#ifndef WEMOS
+//  unsigned long startTime = millis();
   checkButtons();
+//  unsigned long endTime = millis();
+//  Serial.printf("Time to read buttons: %d msec\n", (endTime - startTime));
+#endif
 
   webSocket.loop();
   server.handleClient();
@@ -1418,47 +1533,86 @@ void checkClientConnection(void) {
 }
 
 
-#define TimeBetweenFlashes 500
-unsigned long lastFlashTime = 0;
 bool isFlash = false;
 
 
-void flashTime(unsigned long time) {
+void flashTime() {
   // the temperature sensor blocks the app from running while it is reading.
   // so, it may make the flash look off every time it is being checked
-  if (time - lastFlashTime > TimeBetweenFlashes) {
-    lastFlashTime = time;
-    isFlash = !isFlash;
-    if (isFlash)
-      eraseTime();
-    else
-      printTime(false, true, false);
-  }
+  isFlash = !isFlash;
+  if (isFlash)
+    eraseTime();
+  else
+    printTime(false, true, false);
 }
 
 
+bool isMotion = false;
+
+
 void checkMotion(unsigned long time) {
+//  Serial.println(F("checkMotion"));
+
+#ifdef WEMOS
+  int val = digitalRead(MOTION_PIN);  // read input value
+  if (val == HIGH) {            // check if the input is HIGH
+#else
   Wire.requestFrom(MUX, 1); 
   if (!Wire.available())
     return;
     
   byte value = Wire.read();
   if ((value & MOTION) != 0) {
-//    Serial.println(F("motion"));
-    lastButtonPressTime = time;
-  
-    if (!isDisplayOn) {
-      displayBacklight(true);
+#endif
+    if (!isMotion) {
+      // motion started
+      isMotion = true;
+      Serial.println(F("motion started"));
+      lastButtonPressTime = time;
+    
+      if (!isDisplayOn) {
+        displayBacklight(true);
+      }
+      else {
+        // display is already on, just reset the timeout line
+        drawTimeoutLine();
+      }
+    }
+  }
+  else {
+    if (isMotion) {
+      // motion ended
+      isMotion = false;
+      Serial.println(F("motion ended"));
     }
   }
 }
 
 
-void checkTime(unsigned long time) {
-  int minutes = minute();
+void everySecond() {
+  if (isTempSetup)
+    checkTemperature();
+    
+  // flash the time if its not set
+  if (screen == MAIN) {
+    if (!isTimeSet)
+      flashTime();
+  }
+}
 
+
+void checkTime(unsigned long time) {
+  int seconds = second();
+  if (seconds != lastSeconds) {
+    lastSeconds = seconds;
+    everySecond();
+  }
+  
+  int minutes = minute();
   if (minutes == lastMinutes)
     return;
+
+//  Serial.printf("checkTime\n");
 
   // resync time at 3am every morning
   // this also catches daylight savings time changes which happen at 2am
@@ -1492,30 +1646,33 @@ void everyFiveMinutes(void) {
 }
 
 
-void checkTemperature(unsigned long time) {
-  if (time - lastTempRequest >= delayInMillis) // waited long enough??
-  {
+void checkTemperature() {
 //  Serial.println(F("checking temperature"));
-    checkTemperature();
+  checkInsideTemperature();
 
-    if (config.out_temp) {
-      // if we're not using a remote air temperature sensor, and have two connected sensors,
-      // then read the second sensor now
-      if (!config.use_temp && numDevices == 2)
-        checkOutsideTemperature();
-    }
-        
-    sensors.requestTemperatures(); 
-    lastTempRequest = millis(); 
+  if (config.out_temp) {
+    // if we're not using a remote air temperature sensor, and have two connected sensors,
+    // then read the second sensor now
+    if (!config.use_temp && numDevices == 2)
+      checkOutsideTemperature();
   }
+
+  // request new temperatures
+  sensors.requestTemperatures(); 
 }
 
 
 int lastSentTargetTemperature = TEMP_ERROR;
 
 
-void checkTemperature(void) {
+void checkInsideTemperature(void) {
+  // reading the 1wire temperature takes 12msec, so only check it once
+  // per second.  if we do it too often, we'll mess up other services (like wifi)
+//  unsigned long startTime = millis();
   float tempF = sensors.getTempF((config.swap_sensors == 0) ? thermometer1 : thermometer2);
+//  unsigned long endTime = millis();
+//  Serial.printf("Time to read temperature sensor: %d msec\n", (endTime - startTime));
+  
   tempF = (float)round(tempF*10)/10.0;
   if ( tempF == lastTemp )
     return;
@@ -1538,6 +1695,8 @@ void checkTemperature(void) {
 
 
 void checkOutsideTemperature(void) {
+  // reading the 1wire temperature takes 12msec, so only check it once
+  // per second.  if we do it too often, we'll mess up other services (like wifi)
   float tempF = sensors.getTempF((config.swap_sensors == 0) ? thermometer2 : thermometer1);
   tempF = (float)round(tempF*10)/10.0;
   if ( tempF == lastOutsideTemp )
@@ -1549,28 +1708,18 @@ void checkOutsideTemperature(void) {
 
 
 void setTextSize(int size) {
-#ifdef FONTS
-  if (size == 2)
-    display.setFont(font_arial_16);
-  else if (size == 3)
-    display.setFont(font_arial_24);
-  else
-    display.setFont(font_arial_8);
-#else
-  display.setTextSize(size);
-#endif
+  display.setFont(font_set[size-1]);
 }
 
 
 void eraseTime(void) {
   if (isDisplayOn) {
-    setTextSize(2);
-    char *txt = (char *)"         ";
-    setCursor(128-getStringWidth(txt), 25);
-    display.print(txt);
-    txt = (char *)"              ";
-    setCursor(128-getStringWidth(txt), 45);
-    display.print(txt);
+    if (timeWidth != 0)
+      display.fillRect(WIDTH-timeWidth, 2 *(font_height[1] + 2), timeWidth, font_height[1], ERASE);
+    if (dayWidth != 0)
+      display.fillRect(WIDTH-dayWidth-2, font_height[1] + 2, dayWidth, font_height[1], ERASE);
+    timeWidth = 0;
+    dayWidth = 0;
   }
 }
 
@@ -1579,27 +1728,41 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
   int dayOfWeek = weekday()-1;
   int hours = hour();
   int minutes = minute();
-  const char *ampm = "a";
+  const char *ampm = "A";
   int h = hours;
   if (hours == 0)
     h = 12;
   else if (h == 12)
-    ampm = "p";
+    ampm = "P";
   else if (hours > 12) {
     h -= 12;
-    ampm = "p";
+    ampm = "P";
   }
   char buf[10];
-  sprintf(buf, "  %2d:%02d%s", h, minutes, ampm); 
+  sprintf(buf, "%d:%02d%s", h, minutes, ampm); 
 //  Serial.println(buf);
 
-  if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
+
+  if (isDisplay && isDisplayOn && screen == MAIN) {
+    display.setTextColor(GREEN);
     setTextSize(2);
-    setCursor(128-getStringWidth(buf), 45);
+
+    // time
+    if (timeWidth != 0)
+      display.fillRect(WIDTH-timeWidth-1, 2 *(font_height[1] + 2), timeWidth, font_height[1], ERASE);
+    setCursor(WIDTH-getStringWidth(buf)-4, 3 * font_height[1] + 2*2 - 1);
     display.print(buf);
-    setCursor(128-getStringWidth(weekdayNames[dayOfWeek]), 25);
+    timeWidth = getStringWidth(buf)+1;
+//    Serial.printf("time: %s\n", buf);
+
+    // todo... only draw if the day has changed
+    // day
+    if (dayWidth != 0)
+      display.fillRect(WIDTH-dayWidth-2, font_height[1] + 2, dayWidth, font_height[1], ERASE);
+    setCursor(WIDTH-getStringWidth(weekdayNames[dayOfWeek])-4, 2 * font_height[1] + 2 - 1);
     display.print(weekdayNames[dayOfWeek]);
+    dayWidth = getStringWidth(weekdayNames[dayOfWeek])+1;
+//    Serial.printf("day: %s\n", weekdayNames[dayOfWeek]);
   }
   
   if (webClient != -1 || isTest) {
@@ -1700,26 +1863,23 @@ void checkProgram(int day, int h, int m) {
 }
 
 
-int outsideTempWidth = 0;
-
-
 void eraseOutsideTemperature(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(2);
-
-    int width = 0;
-//    Serial.printf("outside temp %d %d\n", width, outsideTempWidth);
-    if (width < outsideTempWidth) {
-      // erase some more
-      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, getFontHeight(), BLACK);
-    }
-    outsideTempWidth = width;
+    if (outsideTempWidth != 0)
+      display.fillRect(WIDTH-outsideTempWidth, 0, outsideTempWidth, font_height[1], ERASE);
+    outsideTempWidth = 0;
   }
 
   if (webClient != -1) {
     sendWeb("outsideTemp", "");  
   }
+}
+
+
+void addDegree(char *buf) {
+  char *ptr = buf + strlen(buf);
+  *ptr++ = (char)58;  // char after 9 (we manually added degree symbol here)
+  *ptr = '\0';
 }
 
 
@@ -1731,9 +1891,6 @@ void printOutsideTemperature(bool isDisplay) {
     return;
     
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(2);
-
     // weather underground only gives us integer precision for the temperature
     // the temp sensor or the remote air sensor gives us decimal precision
     // so only show the precision we have on the display
@@ -1742,21 +1899,18 @@ void printOutsideTemperature(bool isDisplay) {
       dtostrf(lastOutsideTemp, 4, 1, buf);
     else
       sprintf(buf, "%d", (int)lastOutsideTemp);
-#ifdef FONTS
-    char *ptr = buf + strlen(buf);
-    *ptr++ = (char)176;  // degree symbol
-    *ptr = '\0';
-#endif
-    int width = getStringWidth(buf);
-//    Serial.printf("outside temp %d %d\n", width, outsideTempWidth);
-    if (width < outsideTempWidth) {
-      // erase some more
-      display.fillRect(128-outsideTempWidth, 0, outsideTempWidth-width, getFontHeight(), BLACK);
-    }
-    outsideTempWidth = width;
 
-    setCursor(128-width, 0);
+// cpd...this font doesn't have the degree symbol
+//    addDegree(buf);
+
+    display.setTextColor(GREEN);
+    setTextSize(2);
+    if (outsideTempWidth != 0)
+      display.fillRect(WIDTH-outsideTempWidth, 0, outsideTempWidth, font_height[1], ERASE);
+    setCursor(WIDTH-getStringWidth(buf)-1, font_height[1]-1);
     display.print(buf);
+    outsideTempWidth = getStringWidth(buf)+1;
+//    Serial.printf("outside temp: %s\n", buf);
   }
 
   if (webClient != -1) {
@@ -1770,36 +1924,20 @@ void printOutsideTemperature(bool isDisplay) {
 }
 
 
-int currentTempWidth = 0;
-
-
 void printCurrentTemperature(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(3);
-
     char buf[8];
     dtostrf(lastTemp, 4, 1, buf);
-#ifdef FONTS
-    char *ptr = buf + strlen(buf);
-    *ptr++ = (char)176;
-    *ptr = '\0';
-#endif
-    int width = getStringWidth(buf);
-    if (width < currentTempWidth) {
-      // erase some more
-      display.fillRect(width, 0, currentTempWidth-width, getFontHeight(), BLACK);
-    }
-    currentTempWidth = width;
 
-    setCursor(0, 0);
+    addDegree(buf);
+
+    display.setTextColor(GREEN);
+    setTextSize(3);
+    if (currentTempWidth != 0)
+      display.fillRect(0, 0, currentTempWidth, font_height[2], ERASE);
+    setCursor(0, font_height[2]-1);
     display.print(buf);
-
-//    display.print(lastTemp,1);
-//#ifdef FONTS
-//    display.print((char)176);  // degree symbol
-//#endif
-//    display.print(" ");
+    currentTempWidth = getStringWidth(buf)+1;
   }
 
   if (webClient != -1) {
@@ -1849,17 +1987,20 @@ void printTargetTemperature(bool isDisplay) {
     return;
 
   if (isDisplay && isDisplayOn) {
-    setCursor(0, 34);
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(3);
-    if (config.mode == OFF)
-      display.print("    ");
-    else {
-      display.print(lastTargetTemperature);
-#ifdef FONTS
-      display.print((char)176);  // degree symbol
-#endif
-      display.print(" ");
+    if (targetTempWidth != 0) {
+      display.fillRect(0, font_height[2] + 2, targetTempWidth, font_height[2], ERASE);
+      targetTempWidth = 0;
+    }
+    if (config.mode != OFF) {
+      char buf[6];
+      sprintf(buf, "%d", lastTargetTemperature);
+      addDegree(buf);
+
+      display.setTextColor(GREEN);
+      setTextSize(3);
+      setCursor(0, 2 * font_height[2] + 2 - 1);
+      display.print(buf);
+      targetTempWidth = getStringWidth(buf)+1;
     }
   }
 
@@ -1877,12 +2018,16 @@ void printTargetTemperature(bool isDisplay) {
 
 void printModeState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
+    display.setTextColor(GREEN);
     setTextSize(2);
-    setCursor(0, 70);
+    setCursor(0, 4 * font_height[1] + 3*2 - 1);
     display.print("Mode:");
-    setCursor(128-getStringWidth(modeNames[config.mode]), 70);
+
+    if (modeWidth != 0)  
+      display.fillRect(WIDTH-modeWidth, 3 *(font_height[1] + 2), modeWidth, font_height[1], ERASE);
+    setCursor(WIDTH-getStringWidth(modeNames[config.mode])-3, 4 * font_height[1] + 3*2 - 1);
     display.print(modeNames[config.mode]);
+    modeWidth = getStringWidth(modeNames[config.mode]) + 1;
   }
 
   if (webClient != -1) {
@@ -1895,12 +2040,16 @@ void printModeState(bool isDisplay) {
 
 void printFanState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
+    display.setTextColor(GREEN);
     setTextSize(2);
-    setCursor(0, 90);
+    setCursor(0, 5 * font_height[1] + 4*2 - 1);
     display.print("Fan:");
-    setCursor(128-getStringWidth(fanNames[config.fan]), 90);
+
+    if (fanWidth != 0)    
+      display.fillRect(WIDTH-fanWidth, 4 *(font_height[1] + 2), fanWidth, font_height[1], ERASE);
+    setCursor(WIDTH-getStringWidth(fanNames[config.fan])-1, 5 * font_height[1] + 4*2 - 1);
     display.print(fanNames[config.fan]);
+    fanWidth = getStringWidth(fanNames[config.fan])+1;
   }
 
   if (webClient != -1) {
@@ -1913,15 +2062,25 @@ void printFanState(bool isDisplay) {
 
 void printRunState(bool isDisplay) {
   if (isDisplay && isDisplayOn) {
-    setCursor(0, 110);
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(2);
+    const char *buf = "";
     if (isCompressorOn) 
-      display.print(modeStateNames[mode]);
+      buf = modeStateNames[mode];
     else if (isFanOn)
-      display.print("Fan  ");
-    else
-      display.print("          ");
+      buf = "Fan";
+
+    if (strcmp(buf, lastState) != 0) {
+      display.setTextColor(GREEN);
+      setTextSize(2);
+  
+      if (stateWidth != 0)
+        display.fillRect(0, 5 *(font_height[1] + 2), stateWidth, font_height[1], ERASE);
+      setCursor(0, 6 * font_height[1] + 5*2 - 1);
+        
+      display.print(buf);
+      Serial.println("draw run state");
+      lastState = buf;
+      stateWidth = getStringWidth(buf)+3;
+    }
   }
 
   if (webClient != -1) {
@@ -1936,18 +2095,18 @@ void printRunState(bool isDisplay) {
 
 
 int getStringWidth(const char* buf) {
-//  int16_t w = 0;
-//  for (; *buf != '\0'; buf++) {
-//    w += display.fontWidth(*buf);
-//  }
-//  return w;
-  return 6;
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  return w;
 }
 
 
 int getFontHeight() {
-//  return display.fontHeight();
-  return 10;
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds("[", 0, 0, &x1, &y1, &w, &h);
+  return h;
 }
 
 
@@ -1959,17 +2118,16 @@ void printProgramState(byte p_program, byte p_time, bool isDisplay) {
   last_p_time = p_time;  
 
   if (isDisplay && isDisplayOn) {
-    display.setTextColor(GREEN, BLACK);
-    setTextSize(2);
-    if (config.mode != ON) {
-      setCursor(65, 110);
-      display.print("        ");
-    }
-    else {
+    if (programWidth != 0)
+      display.fillRect(WIDTH-programWidth, 5 *(font_height[1] + 2), programWidth, font_height[1], ERASE);
+    if (config.mode == ON) {
       char buf[6];
       sprintf(buf, "%s %d", program[p_program].name, p_time+1);
-      setCursor(128-getStringWidth(buf), 110);
+      display.setTextColor(GREEN);
+      setTextSize(2);
+      setCursor(WIDTH-getStringWidth(buf)-3, 6 * font_height[1] + 5*2 - 1);
       display.print(buf);
+      programWidth = getStringWidth(buf)+1;
     }
   }
 
@@ -2095,6 +2253,7 @@ void doEnter(void) {
       screen = MENU;
       clearScreen();  
       setSelectedMenuItem(EXIT_BUTTON);
+      drawTimeoutLine();
       break;
     case MENU:
       doMenuEnter();
@@ -2140,13 +2299,10 @@ void drawMainScreen(void) {
   isForcePrint = true;
   printTime(true, true, false);
   isForcePrint = false;
-  
+  drawTimeoutLine();
+
   checkUnit();
 }
-
-
-#define BUTTON_WIDTH 128
-#define BUTTON_HEIGHT 30
 
 
 void setSelectedMenuItem(int item) {
@@ -2161,54 +2317,30 @@ void setSelectedMenuItem(int item) {
 
 void drawMenu(void) {
   // display our ip address
-  setCursor(0, 100);
+  setCursor(0, 6 * font_height[1] + 5*2 - 1);
   display.setTextColor(GREEN);
   setTextSize(2);
   display.print(WiFi.localIP());
 
   drawButton("Mode:", modeNames[config.mode], 0, selectedMenuItem);
   drawButton("Fan:", fanNames[config.fan], 1, selectedMenuItem);
-  drawButton("Exit", 2, selectedMenuItem, 2, 0, 12);
-}
-
-
-void drawButton(const char *s, int i, int sel, int row, int col, int width) {
-  int color = (i == sel) ? RED : GREEN;
-  int x = col * BUTTON_WIDTH/12;
-  int y = row * (BUTTON_HEIGHT+1);
-  int w = width * BUTTON_WIDTH/12;
-  setCursor(x+indent, y+8);
-  display.setTextColor(color, BLACK);
-  setTextSize(2);
-  display.print(s);
-#ifdef DISPLAY_18
-  y += 16;
-#endif
-#ifdef DISPLAY_22
-#endif
-#ifdef DISPLAY_28
-#endif
-  display.drawRect(x,y,w,BUTTON_HEIGHT,color);
+  drawButton("Exit", NULL, 2, selectedMenuItem);
 }
 
 
 void drawButton(const char *s1, const char *s2, int i, int sel) {
   int color = (i == sel) ? RED : GREEN;
-  int y = i * (BUTTON_HEIGHT+1);
-  setCursor(10, y+8);
-  display.setTextColor(color, BLACK);
-  setTextSize(2);
+  int h = font_height[1]*1.5;
+  int y = i*(font_height[1]*1.5);
+  int y2 = y + (font_height[1]*1.2);
+  display.fillRect(0,y,WIDTH,h,BLACK);
+  display.drawRect(0,y,WIDTH,h,color);
+
+  display.setTextColor(color);
+  setCursor(10, y2);
   display.print(s1);
-  if (s2)
+  if (s2 != NULL)
     display.print(s2);
-#ifdef DISPLAY_18
-  y += 16;
-#endif
-#ifdef DISPLAY_22
-#endif
-#ifdef DISPLAY_28
-#endif
-  display.drawRect(0,y,BUTTON_WIDTH,BUTTON_HEIGHT,color);
 }
 
 
@@ -2356,13 +2488,13 @@ void set(char *name, const char *value) {
 void loadConfig(void) {
   int magicNum = EEPROM.read(MAGIC_NUM_ADDRESS);
   if (magicNum != MAGIC_NUM) {
-    Serial.println(F("invalid eeprom data"));
+    println(F("invalid eeprom data"));
     isMemoryReset = true;
   }
   
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
-    Serial.printf("using default config\n");
+    println(F("using default config"));
     set(config.host_name, HOST_NAME);
     set(config.mqtt_ip_addr, MQTT_IP_ADDR);
     config.mqtt_ip_port = MQTT_IP_PORT;
@@ -2411,11 +2543,11 @@ void loadConfig(void) {
 void loadProgramConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
-    Serial.printf("using default programs\n");
+    println(F("using default programs"));
     initProgram();  
   }
   else {
-    Serial.printf("loading programs from eeprom\n");
+    println(F("loading programs from eeprom"));
     int addr = PROGRAM_ADDRESS;
     byte *ptr = (byte *)&program;
     for (int i = 0; i < sizeof(program); ++i, ++ptr, ++addr)
@@ -2511,14 +2643,14 @@ void setupOta(void) {
   });
   
   ArduinoOTA.begin();
-  Serial.println("Arduino OTA ready");
+  println(F("Arduino OTA ready"));
 
   char host[20];
   sprintf(host, "%s-webupdate", config.host_name);
   MDNS.begin(host);
   httpUpdater.setup(&server);
   MDNS.addService("http", "tcp", 80);
-  Serial.println("Web OTA ready");
+  println(F("Web OTA ready"));
 }
 
 
@@ -2875,11 +3007,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 /*
 cpd...todo
-
-
-outside temp doesn't erase correctly (line 1490)
-
-
 
 
 add wires to header for outside temp plug

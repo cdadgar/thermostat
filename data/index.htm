@@ -7,8 +7,6 @@
 <script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
 <script src='common.js'></script>
 <script>
-var log_url;
-
 $(document).ready(function(){
   initGui();
   initWebsocket('');
@@ -19,8 +17,6 @@ function message(msg){
   var obj = JSON.parse(msg.data);
   if (obj.command == 'mode' || obj.command == 'fan')
     $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
-  else if (obj.command == 'log_url')
-	log_url = obj.value;
   else {
     var extra = '';
     if (obj.value != '' && (obj.command == 'currentTemp' || obj.command == 'targetTemp' || obj.command == 'outsideTemp')) {
@@ -74,10 +70,6 @@ function initGui(){
   $('#test').button().click(function(event) {
     window.location.href='./test.htm';
   });
-
-  $('#log').button().click(function(event) {
-    window.open(log_url, '_blank');
-  });
 }
 </script>
 </head>
@@ -85,6 +77,7 @@ function initGui(){
 <div id='message' style='zoom:200%;'></div>
 <div id='controls'>
   <div style='zoom:200%;'>
+    <span id='name' class='ui-widget'></span><br>
     <span id='currentTemp' class='ui-widget'></span>&nbsp;&nbsp;<span id='outsideTemp' class='ui-widget'></span><br>
     <span id='targetTemp' class='ui-widget'></span><br>
     <span id='time' class='ui-widget'></span><br>
@@ -110,7 +103,6 @@ function initGui(){
   <br><br>
   <button id='setup'>Setup</button>
   <button id='test'>Test</button>
-  <button id='log'>Log</button>
 </div>
 </body>
 </html>
